@@ -1,8 +1,9 @@
 import CPP.Absyn.*;
+import com.sun.org.apache.xpath.internal.operations.Bool;
 
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.Scanner;
+import java.util.TreeMap;
 
 public class Interpreter {
 
@@ -13,7 +14,7 @@ public class Interpreter {
     private final String READ_INT = "readInt";
     private final String READ_DOUBLE = "readDouble";
 
-    private final String TYPE_INTEGER = "integer";
+    private final String TYPE_INTEGER = "bool_";
     private final String TYPE_DOUBLE = "double";
     private final String TYPE_BOOLEAN = "boolean";
     private final String TYPE_VOID = "void";
@@ -40,35 +41,29 @@ public class Interpreter {
 
         public Environment() {}
 
-        // list of function objects
-        private LinkedList<DFun> functions = new LinkedList<>();
+        // map of function objects
+        private TreeMap<String, DFun> functions = new TreeMap<>();
 
         // table of variables <var name, variable data>
         private HashMap<String, Variable> variables = new HashMap<>();
 
-        public void addFunction(DFun dFun) {
-            functions.add(dFun);
+        public void setFunctions(TreeMap<String, DFun> inits) {
+            this.functions = new TreeMap<>(inits);
         }
 
-        public DFun getFunction(int index) {
-            return functions.get(index);
+        public void addFunction(DFun dFun) {
+            functions.put(dFun.id_, dFun);
         }
 
         public DFun getFunction(String id) {
-            DFun fun = null;
-            for(DFun dFun: getFunctionList()) {
-                if((dFun.id_).equals(id)) {
-                    fun = dFun;
-                }
-            }
-            return fun;
+            return functions.get(id);
         }
 
-        public LinkedList<DFun> getFunctionList() {
+        public TreeMap<String, DFun> getFunctions() {
             return functions;
         }
 
-        public void setVariable(String context, Variable var) {
+        public void addVariable(String context, Variable var) {
             variables.put(context, var);
         }
 
@@ -76,11 +71,15 @@ public class Interpreter {
             return variables.get(context);
         }
 
+        public Variable removeVariable(String context) {
+            return variables.remove(context);
+        }
+
         // value can be many types int, double, boolean
         public void updateVariable(String id, Object value) {
             Variable var = getVariable(id);
             var.setVariableValue(value);
-            setVariable(id, var);
+            addVariable(id, var);
         }
 
     }
@@ -168,14 +167,36 @@ public class Interpreter {
     /**this is the execution method
      * for functions other than main*/
     private void executeOtherFunction(DFun dFun, ListExp listexp) {
+        // declare new environment for this function scope
+        Environment env = new Environment();
+        env.setFunctions(environment.getFunctions());
+
         // define a new statement visitor for this function
         StatementVisitor statementVisitor = new StatementVisitor();
 
-        // TODO first, inspect function params
+        // first, inspect function params
+        int i = 0;
+        for(Arg arg : dFun.listarg_) {
+            Object id = arg.accept(new ArgsVisitor(), env);
+
+            // next, push value to the params variable
+            Object exp = listexp.get(i).accept(new ExpressionVisitor(), env);
+            if(exp instanceof Integer) {
+                env.updateVariable(String.valueOf(id), Integer.valueOf(String.valueOf(exp)));
+            } else if(exp instanceof Double) {
+                env.updateVariable(String.valueOf(id), Double.valueOf(String.valueOf(exp)));
+            } else if(exp instanceof Boolean) {
+                env.updateVariable(String.valueOf(id), Boolean.valueOf(String.valueOf(exp)));
+            } else {
+                env.updateVariable(String.valueOf(id), null);
+            }
+
+            i++;
+        }
 
         // visit all statements
         for (Stm stm: dFun.liststm_) {
-            stm.accept(statementVisitor, environment);
+            stm.accept(statementVisitor, env);
         }
     }
 
@@ -232,7 +253,7 @@ public class Interpreter {
             }
 
             for(String variable : p.listid_) {
-                env.setVariable(variable, new Variable(variable, varTypeString, initVal));
+                env.addVariable(variable, new Variable(variable, varTypeString, initVal));
             }
 
             return null;
@@ -244,9 +265,9 @@ public class Interpreter {
             String varTypeString = varType.accept(new TypeVisitor(), null);
 
             Exp initExp = p.exp_;
-            Object initVal = initExp.accept(new ExpressionVisitor(), null);
+            Object initVal = initExp.accept(new ExpressionVisitor(), env);
 
-            env.setVariable(variable, new Variable(variable, varTypeString, initVal));
+            env.addVariable(variable, new Variable(variable, varTypeString, initVal));
 
             return null;
         }
@@ -287,6 +308,20 @@ public class Interpreter {
         }
 
         public Object visit(SIfElse p, Environment env) {
+            Exp expCondition = p.exp_;
+            Stm stmIf = p.stm_1;
+            Stm stmElse = p.stm_2;
+
+            Object eval = expCondition.accept(new ExpressionVisitor(), env);
+            if(eval instanceof Boolean) {
+                Boolean condition = Boolean.valueOf(String.valueOf(eval));
+                if(condition) {
+                    stmIf.accept(new StatementVisitor(), env);
+                } else {
+                    stmElse.accept(new StatementVisitor(), env);
+                }
+            }
+
             return null;
         }
     }
@@ -366,22 +401,11 @@ public class Interpreter {
         }
 
         private void printOperation(Exp exp, Environment env) {
-            if(exp instanceof EId) {
-                // the param is integer
-                System.out.println(env.getVariable(((EId) exp).id_).getVariableValue());
-
-            } else if(exp instanceof EInt) {
-                // the param is variable
-                System.out.println(((EInt) exp).integer_);
-
-            } else if(exp instanceof EDouble) {
-                // the param is double
-                System.out.println(((EDouble) exp).double_);
-
-            } else if(exp instanceof EApp) {
-                // the param is another method
-                System.out.println("not yet defined");
-
+            Object eval = evaluation(exp, env);
+            if(eval instanceof Integer || eval instanceof Double) {
+                System.out.println(String.valueOf(eval));
+            } else {
+                throw new RuntimeException("Invalid parameter for print method");
             }
         }
 
@@ -390,11 +414,23 @@ public class Interpreter {
 
         /** pre/post in/decrement */
         public Object visit(EPostIncr p, Environment env) {
-            return null;
+            Integer exp = Integer.parseInt(String.valueOf(evaluation(p.exp_, env)));
+            Integer post = exp+1;// TODO this post op can be fault
+
+            String variable = ((EId) (p.exp_)).id_;
+            env.updateVariable(variable, post);
+
+            return exp;
         }
 
         public Object visit(EPostDecr p, Environment env) {
-            return null;
+            Integer exp = Integer.parseInt(String.valueOf(evaluation(p.exp_, env)));
+            Integer post = exp-1;// do post-decrement
+
+            String variable = ((EId) (p.exp_)).id_;
+            env.updateVariable(variable, post);
+
+            return exp;
         }
 
         public Object visit(EPreIncr p, Environment env) {
@@ -409,7 +445,13 @@ public class Interpreter {
         }
 
         public Object visit(EPreDecr p, Environment env) {
-            return null;
+            Integer exp = Integer.parseInt(String.valueOf(evaluation(p.exp_, env)));
+            --exp;// do pre-increment
+
+            String variable = ((EId) (p.exp_)).id_;
+            env.updateVariable(variable, exp);
+
+            return exp;
         }
 
 
@@ -420,7 +462,7 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            if(exp1 instanceof Double || exp2 instanceof Double) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) * Double.valueOf(String.valueOf(exp2));
             } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
                 return (Integer) exp1 * (Integer) exp2;
@@ -433,7 +475,7 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            if(exp1 instanceof Double || exp2 instanceof Double) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) / Double.valueOf(String.valueOf(exp2));
             } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
                 return (Integer) exp1 / (Integer) exp2;
@@ -446,7 +488,7 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            if(exp1 instanceof Double || exp2 instanceof Double) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) + Double.valueOf(String.valueOf(exp2));
             } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
                 return (Integer) exp1 + (Integer) exp2;
@@ -459,7 +501,7 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            if(exp1 instanceof Double || exp2 instanceof Double) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) - Double.valueOf(String.valueOf(exp2));
             } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
                 return (Integer) exp1 - (Integer) exp2;
@@ -476,10 +518,10 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            // TODO be careful with FP numbers for comparing
-            if(exp1 instanceof Double || exp1 instanceof Integer ||
-                    exp2 instanceof Double || exp2 instanceof Integer) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) < Double.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
+                return Integer.valueOf(String.valueOf(exp1)) < Integer.valueOf(String.valueOf(exp2));
             } else {
                 throw new RuntimeException("< operator requires Numbers");
             }
@@ -489,9 +531,10 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            if(exp1 instanceof Double || exp1 instanceof Integer ||
-                    exp2 instanceof Double || exp2 instanceof Integer) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) > Double.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
+                return Integer.valueOf(String.valueOf(exp1)) > Integer.valueOf(String.valueOf(exp2));
             } else {
                 throw new RuntimeException("> operator requires Numbers");
             }
@@ -501,9 +544,10 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            if(exp1 instanceof Double || exp1 instanceof Integer ||
-                    exp2 instanceof Double || exp2 instanceof Integer) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) <= Double.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
+                return Integer.valueOf(String.valueOf(exp1)) <= Integer.valueOf(String.valueOf(exp2));
             } else {
                 throw new RuntimeException("<= operator requires Numbers");
             }
@@ -513,28 +557,65 @@ public class Interpreter {
             Object exp1 = evaluation(p.exp_1, env);
             Object exp2 = evaluation(p.exp_2, env);
 
-            if(exp1 instanceof Double || exp1 instanceof Integer ||
-                    exp2 instanceof Double || exp2 instanceof Integer) {
+            if(exp1 instanceof Double && exp2 instanceof Double) {
                 return Double.valueOf(String.valueOf(exp1)) >= Double.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
+                return Integer.valueOf(String.valueOf(exp1)) >= Integer.valueOf(String.valueOf(exp2));
             } else {
                 throw new RuntimeException(">= operator requires Numbers");
             }
         }
 
         public Object visit(EEq p, Environment env) {
-            return null;
+            Object exp1 = evaluation(p.exp_1, env);
+            Object exp2 = evaluation(p.exp_2, env);
+
+            if(exp1 instanceof Double && exp2 instanceof Double) {
+                return Double.valueOf(String.valueOf(exp1)) == Double.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
+                return Integer.valueOf(String.valueOf(exp1)) == Integer.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Boolean && exp2 instanceof Boolean) {
+                return Boolean.valueOf(String.valueOf(exp1)) == Boolean.valueOf(String.valueOf(exp2));
+            } else {
+                throw new RuntimeException("== operator requires Numbers or Boolean");
+            }
         }
 
         public Object visit(ENEq p, Environment env) {
-            return null;
+            Object exp1 = evaluation(p.exp_1, env);
+            Object exp2 = evaluation(p.exp_2, env);
+
+            if(exp1 instanceof Double && exp2 instanceof Double) {
+                return Double.valueOf(String.valueOf(exp1)) != Double.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Integer && exp2 instanceof Integer) {
+                return Integer.valueOf(String.valueOf(exp1)) != Integer.valueOf(String.valueOf(exp2));
+            } else if(exp1 instanceof Boolean && exp2 instanceof Boolean) {
+                return Boolean.valueOf(String.valueOf(exp1)) != Boolean.valueOf(String.valueOf(exp2));
+            } else {
+                throw new RuntimeException("!= operator requires Numbers or Boolean");
+            }
         }
 
         public Object visit(EAnd p, Environment env) {
-            return null;
+            Object exp1 = evaluation(p.exp_1, env);
+            Object exp2 = evaluation(p.exp_2, env);
+
+            if(exp1 instanceof Boolean && exp2 instanceof Boolean) {
+                return Boolean.valueOf(String.valueOf(exp1)) && Boolean.valueOf(String.valueOf(exp2));
+            } else {
+                throw new RuntimeException("&& operator requires Boolean");
+            }
         }
 
         public Object visit(EOr p, Environment env) {
-            return null;
+            Object exp1 = evaluation(p.exp_1, env);
+            Object exp2 = evaluation(p.exp_2, env);
+
+            if(exp1 instanceof Boolean && exp2 instanceof Boolean) {
+                return Boolean.valueOf(String.valueOf(exp1)) || Boolean.valueOf(String.valueOf(exp2));
+            } else {
+                throw new RuntimeException("|| operator requires Boolean");
+            }
         }
 
 
@@ -585,6 +666,24 @@ public class Interpreter {
         @Override
         public String visit(Type_void p, Environment arg) {
             return TYPE_VOID;
+        }
+    }
+
+
+
+
+    public class ArgsVisitor implements Arg.Visitor<Object, Environment> {
+
+        @Override
+        public Object visit(ADecl p, Environment env) {
+
+            String variable = p.id_;
+            Type varType = p.type_;
+            String varTypeString = varType.accept(new TypeVisitor(), null);
+
+            env.addVariable(variable, new Variable(variable, varTypeString, null));
+
+            return variable;
         }
     }
 
