@@ -166,7 +166,10 @@ public class Interpreter {
 
     /**this is the execution method
      * for functions other than main*/
-    private void executeOtherFunction(DFun dFun, ListExp listexp) {
+    private Object executeOtherFunction(DFun dFun, ListExp listexp) {
+
+        Object returnValue = null;
+
         // declare new environment for this function scope
         Environment env = new Environment();
         env.setFunctions(environment.getFunctions());
@@ -180,7 +183,7 @@ public class Interpreter {
             Object id = arg.accept(new ArgsVisitor(), env);
 
             // next, push value to the params variable
-            Object exp = listexp.get(i).accept(new ExpressionVisitor(), env);
+            Object exp = listexp.get(i).accept(new ExpressionVisitor(), environment);
             if(exp instanceof Integer) {
                 env.updateVariable(String.valueOf(id), Integer.valueOf(String.valueOf(exp)));
             } else if(exp instanceof Double) {
@@ -196,8 +199,16 @@ public class Interpreter {
 
         // visit all statements
         for (Stm stm: dFun.liststm_) {
-            stm.accept(statementVisitor, env);
+            Object stmValue = stm.accept(statementVisitor, env);
+
+            if(stmValue != null) {
+                // because for now we assume that only
+                // return statement that results a value
+                returnValue = stmValue;
+            }
         }
+
+        return returnValue;
     }
 
 
@@ -273,7 +284,10 @@ public class Interpreter {
         }
 
         public Object visit(SReturn p, Environment env) {
-            return null;
+            Exp returnExp = p.exp_;
+            Object returnVal = returnExp.accept(new ExpressionVisitor(), env);
+
+            return returnVal;
         }
 
         public Object visit(SWhile p, Environment env) {
@@ -321,9 +335,9 @@ public class Interpreter {
                     stmElse.accept(new StatementVisitor(), env);
                 }
             }
-
             return null;
         }
+
     }
 
 
@@ -365,23 +379,19 @@ public class Interpreter {
             // get all the argument params
             ListExp listExp = p.listexp_;
 
-            if(PRINT_INT.equals(p.id_)) {
+            if(PRINT_INT.equals(p.id_) || PRINT_DOUBLE.equals(p.id_)) {
                 printOperation(listExp.getFirst(), env);
-
-            } else if(PRINT_DOUBLE.equals(p.id_)) {
-
+                return null;
             } else if(READ_INT.equals(p.id_)) {
                 return readIntOperation();
-
             } else if(READ_DOUBLE.equals(p.id_)) {
                 return readDoubleOperation();
-
             } else {
                 // other custom functions
-                executeOtherFunction(env.getFunction(p.id_), p.listexp_);
+                Object funcRetValue = executeOtherFunction(env.getFunction(p.id_), p.listexp_);
+                return funcRetValue;
             }
 
-            return null;
         }
 
         private Object readIntOperation() {
@@ -680,7 +690,6 @@ public class Interpreter {
             String variable = p.id_;
             Type varType = p.type_;
             String varTypeString = varType.accept(new TypeVisitor(), null);
-
             env.addVariable(variable, new Variable(variable, varTypeString, null));
 
             return variable;
