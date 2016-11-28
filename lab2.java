@@ -16,7 +16,7 @@ public class lab2 {
             l = new Yylex(new FileReader(args[0]));
             parser p = new parser(l);
             CPP.Absyn.Program parse_tree = p.pProgram();
-            //new TypeChecker().typecheck(parse_tree);
+            new TypeChecker().typeCheck(parse_tree);
             new Interpreter().interpret(parse_tree);
 
         } catch (TypeException e) {

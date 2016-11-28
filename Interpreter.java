@@ -1,6 +1,7 @@
 import CPP.Absyn.*;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Scanner;
 
@@ -108,13 +109,17 @@ public class Interpreter {
         }
 
         // visit all statements
-        for (Stm stm: dFun.liststm_) {
-            Object stmValue = stm.accept(statementVisitor, envLocal);
+        boolean iterate = true;
+        Iterator<Stm> iterator = dFun.liststm_.iterator();
+
+        while (iterator.hasNext() && iterate) {
+            Object stmValue = iterator.next().accept(statementVisitor, envLocal);
 
             if(stmValue != null) {
                 // because for now we assume that only
                 // return statement that results a value
                 returnValue = stmValue;
+                iterate = false;
             }
         }
         return returnValue;
@@ -213,6 +218,7 @@ public class Interpreter {
 
         public Object visit(SBlock p, Environment env) {
             ListStm listStm = p.liststm_;
+            Object value = null;
 
             Environment envBlock = new Environment();
             envBlock.setFunctions(env.getFunctions());
@@ -227,7 +233,10 @@ public class Interpreter {
             }
 
             for(Stm stm : listStm) {
-                stm.accept(new StatementVisitor(), envBlock);
+                value = stm.accept(new StatementVisitor(), envBlock);
+                if(value != null) {
+                    return value;
+                }
             }
 
             for(Variable variable : envBlock.getVariables().values()) {
@@ -236,24 +245,25 @@ public class Interpreter {
                 }
             }
 
-            return null;
+            return value;
         }
 
         public Object visit(SIfElse p, Environment env) {
             Exp expCondition = p.exp_;
             Stm stmIf = p.stm_1;
             Stm stmElse = p.stm_2;
+            Object value = null;
 
             Object eval = expCondition.accept(new ExpressionVisitor(), env);
             if(eval instanceof Boolean) {
                 Boolean condition = Boolean.valueOf(String.valueOf(eval));
                 if(condition) {
-                    stmIf.accept(new StatementVisitor(), env);
+                    value = stmIf.accept(new StatementVisitor(), env);
                 } else {
-                    stmElse.accept(new StatementVisitor(), env);
+                    value = stmElse.accept(new StatementVisitor(), env);
                 }
             }
-            return null;
+            return value;
         }
     }
 
